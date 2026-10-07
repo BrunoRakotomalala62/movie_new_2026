@@ -46,6 +46,7 @@ SEARCH_URL = "https://archive.org/advancedsearch.php"
 META_URL = "https://archive.org/metadata/{identifier}"
 DOWNLOAD_URL = "https://archive.org/download/{identifier}/{filename}"
 DETAILS_URL = "https://archive.org/details/{identifier}"
+IMG_URL = "https://archive.org/services/img/{identifier}"
 
 QUALITES_VALIDES = {"360", "480", "720", "1080"}
 RESULTATS_PAR_PAGE = 25
@@ -263,6 +264,7 @@ async def recherche(
             "annee": d.get("year"),
             "createur": d.get("creator"),
             "telechargements": d.get("downloads"),
+            "image": IMG_URL.format(identifier=d.get("identifier")),
             "page": DETAILS_URL.format(identifier=d.get("identifier")),
         })
 
