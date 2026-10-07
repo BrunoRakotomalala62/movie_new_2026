@@ -236,21 +236,28 @@ async def recherche(
     page: int = Query(1, ge=1),
     limite: int = Query(RESULTATS_PAR_PAGE, ge=1, le=50),
 ):
-    q = f'title:("{film}") AND mediatype:(movies)'
-    params = {
-        "q": q,
-        "fl[]": ["identifier", "title", "year", "downloads", "mediatype", "creator"],
-        "sort[]": "downloads desc",
-        "rows": limite,
-        "page": page,
-        "output": "json",
-    }
-    try:
-        r = await _http().get(SEARCH_URL, params=params)
-        r.raise_for_status()
-        data = r.json()
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"Source indisponible : {e}")
+    async def _chercher(q: str) -> dict:
+        params = {
+            "q": q,
+            "fl[]": ["identifier", "title", "year", "downloads", "mediatype", "creator"],
+            "sort[]": "downloads desc",
+            "rows": limite,
+            "page": page,
+            "output": "json",
+        }
+        try:
+            r = await _http().get(SEARCH_URL, params=params)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Source indisponible : {e}")
+
+    # 1) recherche stricte sur le titre ; 2) si rien, recherche élargie (tous champs)
+    mode = "titre"
+    data = await _chercher(f'title:("{film}") AND mediatype:(movies)')
+    if (data.get("response") or {}).get("numFound", 0) == 0:
+        mode = "etendu"
+        data = await _chercher(f'({film}) AND mediatype:(movies)')
 
     docs = (data.get("response") or {}).get("docs") or []
     total = (data.get("response") or {}).get("numFound", 0)
@@ -272,6 +279,7 @@ async def recherche(
 
     return JSONResponse({
         "requete": film,
+        "mode": mode,
         "uid": uid,
         "page": page,
         "total": total,
