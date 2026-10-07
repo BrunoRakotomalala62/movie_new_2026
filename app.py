@@ -47,6 +47,31 @@ META_URL = "https://archive.org/metadata/{identifier}"
 DOWNLOAD_URL = "https://archive.org/download/{identifier}/{filename}"
 DETAILS_URL = "https://archive.org/details/{identifier}"
 IMG_URL = "https://archive.org/services/img/{identifier}"
+IMAGE_EXT = re.compile(r"\.(jpe?g|png|gif)$", re.IGNORECASE)
+
+
+async def _meilleure_image(identifier: str) -> Optional[str]:
+    """Cherche la plus grande image (jpg/png) dans les fichiers de l'item."""
+    try:
+        r = await _http().get(META_URL.format(identifier=identifier), timeout=6)
+        r.raise_for_status()
+        fichiers = (r.json() or {}).get("files") or []
+    except Exception:
+        return None
+    images = [
+        f for f in fichiers
+        if IMAGE_EXT.search(f.get("name", ""))
+        and not f.get("private")
+        and "__ia_thumb" not in f.get("name", "")
+        and "_thumb" not in f.get("name", "").lower()
+    ]
+    if not images:
+        return None
+    # préférer jpg/png ; gif seulement en dernier recours (souvent animés/lourds)
+    non_gif = [f for f in images if not f.get("name", "").lower().endswith(".gif")]
+    images = non_gif or images
+    plus_grande = max(images, key=lambda f: int(f.get("size") or 0))
+    return DOWNLOAD_URL.format(identifier=identifier, filename=quote(plus_grande["name"]))
 
 QUALITES_VALIDES = {"360", "480", "720", "1080"}
 RESULTATS_PAR_PAGE = 25
@@ -252,9 +277,14 @@ async def recherche(
         except httpx.HTTPError as e:
             raise HTTPException(502, f"Source indisponible : {e}")
 
-    # 1) recherche stricte sur le titre ; 2) si rien, recherche élargie (tous champs)
+    # 1) titre exact ; 2) titre avec joker (saisie partielle : "fal" -> fal*) ;
+    # 3) recherche élargie tous champs
     mode = "titre"
     data = await _chercher(f'title:("{film}") AND mediatype:(movies)')
+    if (data.get("response") or {}).get("numFound", 0) == 0:
+        mode = "titre_partiel"
+        joker = " ".join(f"{m}*" for m in film.split())
+        data = await _chercher(f'title:({joker}) AND mediatype:(movies)')
     if (data.get("response") or {}).get("numFound", 0) == 0:
         mode = "etendu"
         data = await _chercher(f'({film}) AND mediatype:(movies)')
@@ -274,6 +304,15 @@ async def recherche(
             "image": IMG_URL.format(identifier=d.get("identifier")),
             "page": DETAILS_URL.format(identifier=d.get("identifier")),
         })
+
+    # grandes images en parallèle (repli : vignette standard)
+    grandes = await asyncio.gather(
+        *(_meilleure_image(r["identifier"]) for r in resultats),
+        return_exceptions=True,
+    )
+    for r, g in zip(resultats, grandes):
+        if isinstance(g, str) and g:
+            r["image"] = g
 
     _cache_put(uid, resultats)
 
